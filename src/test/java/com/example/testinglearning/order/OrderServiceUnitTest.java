@@ -88,6 +88,27 @@ class OrderServiceUnitTest {
 
     // --- markAsPaid -------------------------------------------------------
 
+    // --- getOrder -------------------------------------------------------
+
+    @Test
+    void getOrder_whenFound_returnsTheOrder() {
+        Order order = existingOrder(1L, OrderStatus.CREATED);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+
+        Order result = orderService.getOrder(1L);
+
+        assertThat(result).isSameAs(order);
+    }
+
+    @Test
+    void getOrder_whenNotFound_throwsOrderNotFoundException() {
+        when(orderRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> orderService.getOrder(99L))
+                .isInstanceOf(OrderNotFoundException.class)
+                .hasMessageContaining("99");
+    }
+
     @Test
     void markAsPaid_fromCreated_transitionsToPaid() {
         Order order = existingOrder(1L, OrderStatus.CREATED);

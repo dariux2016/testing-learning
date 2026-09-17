@@ -77,6 +77,25 @@ No Spring context at all — that's what makes these fast and precise.
 - Cover: request/response JSON shape, validation error responses (400 + the exact body shape your
   `@ControllerAdvice` produces), content negotiation, status code per scenario, path/query param
   binding and type conversion edge cases.
+- **Spring Boot 4 setup**: `@WebMvcTest` moved out of `spring-boot-starter-test` into
+  `spring-boot-starter-webmvc-test` (package `org.springframework.boot.webmvc.test.autoconfigure`),
+  the same split `@DataJpaTest` got. `RestTestClient` injection needs `spring-boot-resttestclient`
+  + `@AutoConfigureRestTestClient`; inside a `@WebMvcTest` it's bound to MockMvc automatically.
+  `@MockitoBean` (Spring Framework's replacement for Boot's removed `@MockBean`) swaps in the mock.
+- **Keep the slice honest**: request/response DTOs (records), never entities, so the JSON is a
+  deliberate contract. Pin the success shape once with `expectBody().json(..., JsonCompareMode.STRICT)`
+  — strict mode fails on *extra* fields too, which is exactly how an accidental API change shows up.
+  Use `jsonPath` for the remaining tests that only care about one or two fields.
+- **One error contract**: have the `@RestControllerAdvice` return RFC 9457 `ProblemDetail` and
+  extend `ResponseEntityExceptionHandler`, so framework-level failures (malformed JSON, `/orders/abc`
+  type mismatch, missing `@RequestParam`, 415/406) get the same `application/problem+json` shape as
+  your own domain exceptions. Gotcha: Spring omits `"type"` when it's the default `about:blank`.
+- **What to `verify()` here**: the DTO → service-argument mapping is the controller's own logic, so
+  an `ArgumentCaptor` on the service call is legitimate. For requests rejected before the handler
+  runs (bad JSON, bad path variable, wrong verb/media type), `verifyNoInteractions(service)` proves
+  the framework stopped them. Everything else is just `when(...)` stubbing.
+- Build `Order` fixtures with an id via `ReflectionTestUtils.setField` rather than adding a
+  test-only setter to the entity.
 
 ## 5. Full integration testing
 

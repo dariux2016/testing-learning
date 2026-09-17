@@ -22,9 +22,10 @@ Don't trust a memorized "we're on step N" — the doc's §12 checklist maps 1:1 
 disk. Check `src/main/java/.../order/` (or whichever feature package is active) and
 `src/test/java/.../order/` against §12's list to see what's already built, then implement the next
 unbuilt step as its own small slice. As of this file's last update the pattern established is:
-step 1 (entity + repository + `OrderRepositorySliceTest`) and step 2 (`OrderService` +
-`OrderServiceUnitTest`) are done — verify this is still true by reading the tree rather than
-trusting this sentence.
+step 1 (entity + repository + `OrderRepositorySliceTest`), step 2 (`OrderService` +
+`OrderServiceUnitTest`), and step 3 (`OrderController` + `OrderControllerSliceTest`, via
+`@WebMvcTest`) are done — verify this is still true by reading the tree rather than trusting this
+sentence.
 
 ## Workflow
 
@@ -66,6 +67,19 @@ trusting this sentence.
 - `Clock` injection and Bean Validation are deliberately deferred to the "edge cases" step (§9,
   build-order step 8) — don't pull them in early just because they're easy; keep each step scoped
   to what its build-order entry actually asks for.
+- Controller layer (`OrderController`): request/response are separate DTO records
+  (`PlaceOrderRequest`, `OrderResponse`), never the JPA entity directly — keeps the JSON contract
+  from silently changing when the persistence model does. Errors go through a single
+  `@RestControllerAdvice` (`OrderExceptionHandler`) extending `ResponseEntityExceptionHandler` and
+  returning RFC 9457 `ProblemDetail`, so both domain exceptions and framework-level failures
+  (malformed JSON, path-variable type mismatch, missing query param, 415/406) share one error
+  shape. Spring Boot 4 note: `@WebMvcTest` now lives in `spring-boot-starter-webmvc-test`
+  (`org.springframework.boot.webmvc.test.autoconfigure`), and `RestTestClient` injection needs
+  `spring-boot-resttestclient` + `@AutoConfigureRestTestClient` (auto-bound to MockMvc inside a
+  `@WebMvcTest`). Pin the success-response JSON once with
+  `expectBody().json(..., JsonCompareMode.STRICT)` (catches accidental extra/renamed fields);
+  `jsonPath` for narrower assertions elsewhere. Build entity fixtures with a generated id via
+  `ReflectionTestUtils.setField` rather than adding a test-only setter.
 
 ## Keeping this file current
 

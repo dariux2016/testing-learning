@@ -30,6 +30,10 @@ public class OrderService {
         }
     }
 
+    public Order getOrder(Long orderId) {
+        return getOrThrow(orderId);
+    }
+
     public Order markAsPaid(Long orderId) {
         Order order = getOrThrow(orderId);
         if (order.getStatus() != OrderStatus.CREATED) {
