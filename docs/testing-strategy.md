@@ -28,6 +28,10 @@ integration tests. Keep e2e to a handful of smoke scenarios. The shape matters b
 keeps the feedback loop fast — a broken unit test should fail in milliseconds, not after a 30
 second Spring context + container startup.
 
+Every test class is named after its tier — `XxxUnitTest` / `XxxSliceTest` / `XxxIntegrationTest` /
+`XxxE2eTest` — never a bare `XxxTest`, so the tier is obvious from the file name alone (see
+AGENTS.md). E.g. the repository tests in §3 live in `OrderRepositorySliceTest`.
+
 ## 2. Unit testing services / domain logic
 
 No Spring context at all — that's what makes these fast and precise.

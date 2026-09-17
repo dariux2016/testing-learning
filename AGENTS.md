@@ -27,6 +27,20 @@ to test each kind of component. That file is the canonical reference — when a 
 or technique gets added to the project, append it there rather than only describing it in a
 commit message.
 
+## Naming convention
+
+**Every test class name must state which pyramid tier it belongs to** — no bare `XxxTest`. Suffix
+by tier (see docs/testing-strategy.md §1 for what each tier means):
+
+- `XxxUnitTest` — no Spring context (plain JUnit + Mockito)
+- `XxxSliceTest` — partial context (`@WebMvcTest`, `@DataJpaTest`, `@JsonTest`, `@RestClientTest`, ...)
+- `XxxIntegrationTest` — full context (`@SpringBootTest`, usually + Testcontainers)
+- `XxxE2eTest` — black-box, against a running app
+
+E.g. `OrderRepositorySliceTest`, `OrderServiceUnitTest`, `OrderControllerSliceTest`,
+`OrderPlacementIntegrationTest`. Apply this to every new test class going forward, not just to
+repository tests.
+
 ## Workflow preferences
 
 - **Always produce or update a plan before writing code** for anything non-trivial. Don't jump
