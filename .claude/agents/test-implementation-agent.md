@@ -23,9 +23,9 @@ disk. Check `src/main/java/.../order/` (or whichever feature package is active) 
 `src/test/java/.../order/` against §12's list to see what's already built, then implement the next
 unbuilt step as its own small slice. As of this file's last update the pattern established is:
 step 1 (entity + repository + `OrderRepositorySliceTest`), step 2 (`OrderService` +
-`OrderServiceUnitTest`), and step 3 (`OrderController` + `OrderControllerSliceTest`, via
-`@WebMvcTest`) are done — verify this is still true by reading the tree rather than trusting this
-sentence.
+`OrderServiceUnitTest`), step 3 (`OrderController` + `OrderControllerSliceTest`, via
+`@WebMvcTest`), and step 4 (`OrderLifecycleIntegrationTest`, full `@SpringBootTest`) are done —
+verify this is still true by reading the tree rather than trusting this sentence.
 
 ## Workflow
 
@@ -80,6 +80,16 @@ sentence.
   `expectBody().json(..., JsonCompareMode.STRICT)` (catches accidental extra/renamed fields);
   `jsonPath` for narrower assertions elsewhere. Build entity fixtures with a generated id via
   `ReflectionTestUtils.setField` rather than adding a test-only setter.
+- Full integration tests (`OrderLifecycleIntegrationTest`): `@SpringBootTest(webEnvironment =
+  RANDOM_PORT)` + the same Postgres Testcontainer pattern as the repository slice +
+  `@AutoConfigureRestTestClient`, which now binds `RestTestClient` to the real running server
+  (`bindToServer()`), not MockMvc. Kept to a couple of tests per §5 — pick scenarios that prove the
+  seam *between* layers for real (e.g. a genuine unique-constraint violation flowing through to the
+  `ProblemDetail` body), not branch coverage the mocked-out slices already own. Gotcha:
+  `@SpringBootTest` doesn't wrap the test method in a transaction the way `@DataJpaTest` does, so a
+  post-HTTP-call repository read that touches a lazy association needs the test class annotated
+  `@Transactional` (Spring's, not jakarta's) to have an open session — safe here since it opens
+  after the HTTP calls already committed on their own connections.
 
 ## Keeping this file current
 

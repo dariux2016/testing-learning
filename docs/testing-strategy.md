@@ -105,6 +105,24 @@ No Spring context at all — that's what makes these fast and precise.
 - Reach for this tier when you need to prove cross-cutting concerns actually work together: real
   Spring Security filter chain, real transaction boundaries, real serialization end-to-end. Keep
   this tier small — it's the slowest, and slices already cover most of the same ground faster.
+- **`RestTestClient` binds to real HTTP here, not MockMvc**: with `webEnvironment = RANDOM_PORT`
+  (or `DEFINED_PORT`), Boot's `RestTestClientTestAutoConfiguration` detects the running server and
+  binds the client to it with `RestTestClient.bindToServer()` — same annotation
+  (`@AutoConfigureRestTestClient`) and API as the `@WebMvcTest` slices in §4, but now requests
+  actually travel over the network and responses are actually deserialized from the wire.
+- **Pick scenarios the mocked-out slices can't prove for real.** Don't re-test every branch here —
+  each layer's own tier already covers its branches with something mocked away. What's worth the
+  cost of this tier is exactly the seam between layers: e.g. a real unique-constraint violation
+  flowing all the way from Postgres through the service's exception translation to the controller's
+  `ProblemDetail` body, which every other tier only *simulates* by mocking the exception.
+- **Gotcha**: unlike `@DataJpaTest`, `@SpringBootTest` does not wrap the test method in a
+  transaction. Each HTTP call commits on its own server-side thread/connection. If the test itself
+  then reads back an entity via a `@Autowired` repository and touches a lazy association,
+  expect `LazyInitializationException` — there's no open Hibernate session on the test thread.
+  Annotate the test class with Spring's `@Transactional` to open one for the test thread's own
+  reads; it's safe here because it starts *after* the HTTP calls already committed on their own
+  connections, so it still sees their data, and it only rolls back the test's own read-side work
+  (and conveniently keeps the shared static container clean between test methods).
 
 ## 6. Kafka producer/consumer testing
 
