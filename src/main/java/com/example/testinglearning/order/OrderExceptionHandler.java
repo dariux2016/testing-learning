@@ -38,6 +38,22 @@ public class OrderExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
+    @ExceptionHandler(ShipmentRejectedException.class)
+    ProblemDetail handleShipmentRejected(ShipmentRejectedException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
+        problem.setTitle("Shipment rejected by carrier");
+        return problem;
+    }
+
+    // 503 rather than 500: our service is fine, but a dependency it needs isn't right now, so a
+    // client may try again later.
+    @ExceptionHandler(ShippingUnavailableException.class)
+    ProblemDetail handleShippingUnavailable(ShippingUnavailableException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
+        problem.setTitle("Shipping carrier unavailable");
+        return problem;
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     ProblemDetail handleIllegalArgument(IllegalArgumentException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());

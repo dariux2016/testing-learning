@@ -192,6 +192,46 @@ poison-pill handling (what happens when a message fails to deserialize).
 - Optional, later: **Spring Cloud Contract** for consumer-driven contract tests, if the "other
   endpoint" is also something you own and can co-evolve the contract with.
 
+**As built in this repo** (`OrderService.ship()` books a parcel with an external carrier):
+
+- **Split the client in two.** `ShippingClient` makes one raw HTTP call and translates every
+  failure into one of two exceptions: `ShipmentRejectedException` (the carrier said "no", any 4xx
+  except 429) or `ShippingUnavailableException` (5xx, 429, timeout, reset connection, unreadable
+  body). `ResilientShippingClient` wraps it with Resilience4j Retry + CircuitBreaker. Each class
+  then has exactly one concern to test.
+- **Unit tier (`ShippingClientUnitTest`)**: request mapping (`CreateShipmentRequest.from`) and
+  status/exception translation (`ShippingClient.translate`), as plain functions. *Don't* mock
+  `RestClient`'s fluent chain. Such a test mostly checks the mocks were chained correctly and says
+  nothing about real HTTP.
+- **Slice tier (`ShippingClientSliceTest`)**: `@RestClientTest` gives Boot's configured
+  `RestClient.Builder`. By default it also installs `MockRestServiceServer`, which never opens a
+  socket and so **can't produce timeouts, slow responses or connection resets**. Turn it off with
+  `@AutoConfigureMockRestServiceServer(enabled = false)` and point the client at a WireMock server
+  instead (`@RegisterExtension WireMockExtension` + `@DynamicPropertySource` for the base URL).
+  Cover success, the exact outgoing request (`carrier.verify(...)`), 400/422, 429, 500/503, a delay
+  inside and a delay outside the read timeout, `Fault.CONNECTION_RESET_BY_PEER`, malformed JSON,
+  and a 200 without the required field.
+- **Resilience (`ResilientShippingClientUnitTest`)**: decorate in code
+  (`Retry.decorateSupplier(retry, CircuitBreaker.decorateSupplier(cb, call))`) rather than with
+  `@Retry`/`@CircuitBreaker` annotations. Then the test can build *real* Retry/CircuitBreaker
+  instances from hand-written configs and mock only the raw client, with no Spring and no network.
+  Count delegate calls to prove: retry on "unavailable", no retry on "rejected", giving up after
+  max attempts, the circuit opening (and then not calling the carrier at all), and rejections never
+  tripping the circuit. Order matters: Retry outside CircuitBreaker means *each attempt* counts
+  toward the failure rate.
+- **Integration tier (`OrderShippingIntegrationTest`)**: the one place that proves the
+  `resilience4j.*.instances.shipping.*` properties actually bind. A WireMock **scenario** (a
+  stateful stub: 503 → 503 → 201) shows up as exactly 3 requests on the wire, all with the same
+  `Idempotency-Key` header. A permanent 503 surfaces as our own 503 `ProblemDetail` while the real
+  DB still holds the order as PAID. Gotcha: the cached Spring context keeps circuit-breaker state
+  across test methods even though WireMock resets its stubs between them, so reset the breaker in
+  `@BeforeEach`.
+- Spring Boot 4 module notes: `RestClient.Builder` autoconfig is in `spring-boot-starter-restclient`,
+  `@RestClientTest` is in `spring-boot-starter-restclient-test`
+  (`org.springframework.boot.restclient.test.autoconfigure`), and Resilience4j's Boot 4 module is
+  `resilience4j-spring-boot4`. Use `wiremock-standalone`, which bundles its own Jetty and Jackson 2
+  and so can't clash with Boot 4's Jackson 3.
+
 ## 8. Security testing
 
 Layered, from cheapest to most realistic:

@@ -37,6 +37,10 @@ public class Order {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    // Assigned by the shipping carrier when the order ships; null until then.
+    @Column(name = "tracking_number")
+    private String trackingNumber;
+
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private final List<OrderItem> items = new ArrayList<>();
 
@@ -83,6 +87,14 @@ public class Order {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public String getTrackingNumber() {
+        return trackingNumber;
+    }
+
+    public void setTrackingNumber(String trackingNumber) {
+        this.trackingNumber = trackingNumber;
     }
 
     public List<OrderItem> getItems() {

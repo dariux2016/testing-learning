@@ -47,9 +47,44 @@
             <artifactId>spring-boot-starter-kafka</artifactId>
         </dependency>
 
+        <!-- Spring Boot 4 splits RestClient.Builder autoconfiguration (HTTP message converters,
+             request-factory detection) out of the web starter into this one. Used by
+             ShippingClient for the outbound call to the carrier (see docs/testing-strategy.md #7). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-restclient</artifactId>
+        </dependency>
+
+        <!-- Retry + CircuitBreaker around the carrier call. The spring-boot4 module binds
+             resilience4j.retry.* / resilience4j.circuitbreaker.* properties into RetryRegistry /
+             CircuitBreakerRegistry beans. ResilientShippingClient applies them programmatically,
+             so no AOP starter is needed for the annotations. -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-spring-boot4</artifactId>
+            <version>2.4.0</version>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- @RestClientTest lives in its own module in Spring Boot 4. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-restclient-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- A real HTTP server standing in for the carrier. The -standalone jar shades its own
+             Jetty + Jackson 2, so it can't clash with Boot 4's Jackson 3. Boot doesn't manage
+             WireMock's version, hence the explicit pin. -->
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.13.2</version>
             <scope>test</scope>
         </dependency>
 

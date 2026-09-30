@@ -1,11 +1,15 @@
 package com.example.testinglearning.order;
 
+import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.client.RestTestClient;
 import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -14,6 +18,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
+import static com.github.tomakehurst.wiremock.client.WireMock.post;
+import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -51,6 +58,19 @@ class OrderLifecycleIntegrationTest {
     @ServiceConnection
     static final KafkaContainer kafka = new KafkaContainer(DockerImageName.parse("apache/kafka:4.0.0"));
 
+    // ship() now books the parcel with the external carrier (see ShippingClient). A happy-path
+    // WireMock stub keeps this test about the order lifecycle. The carrier's failure modes are
+    // covered by ShippingClientSliceTest and OrderShippingIntegrationTest.
+    @RegisterExtension
+    static final WireMockExtension carrier = WireMockExtension.newInstance()
+            .options(wireMockConfig().dynamicPort())
+            .build();
+
+    @DynamicPropertySource
+    static void carrierUrl(DynamicPropertyRegistry registry) {
+        registry.add("shipping.client.base-url", carrier::baseUrl);
+    }
+
     @Autowired
     private RestTestClient client;
 
@@ -82,13 +102,20 @@ class OrderLifecycleIntegrationTest {
                 .expectStatus().isOk()
                 .expectBody().jsonPath("$.status").isEqualTo("PAID");
 
+        carrier.stubFor(post("/shipments").willReturn(okJson("""
+                { "trackingNumber": "TRACK-LIFECYCLE-1" }
+                """).withStatus(201)));
+
         client.post().uri("/api/orders/{id}/ship", orderId)
                 .exchange()
                 .expectStatus().isOk()
-                .expectBody().jsonPath("$.status").isEqualTo("SHIPPED");
+                .expectBody()
+                .jsonPath("$.status").isEqualTo("SHIPPED")
+                .jsonPath("$.trackingNumber").isEqualTo("TRACK-LIFECYCLE-1");
 
         Order persisted = orderRepository.findById(orderId).orElseThrow();
         assertThat(persisted.getStatus()).isEqualTo(OrderStatus.SHIPPED);
+        assertThat(persisted.getTrackingNumber()).isEqualTo("TRACK-LIFECYCLE-1");
         assertThat(persisted.getItems()).extracting(OrderItem::getProductName).containsExactly("Widget");
     }
 

@@ -11,10 +11,13 @@ public class OrderService {
 
     private final OrderRepository orderRepository;
     private final OrderEventPublisher orderEventPublisher;
+    private final ResilientShippingClient shippingClient;
 
-    public OrderService(OrderRepository orderRepository, OrderEventPublisher orderEventPublisher) {
+    public OrderService(OrderRepository orderRepository, OrderEventPublisher orderEventPublisher,
+                        ResilientShippingClient shippingClient) {
         this.orderRepository = orderRepository;
         this.orderEventPublisher = orderEventPublisher;
+        this.shippingClient = shippingClient;
     }
 
     public Order placeOrder(String orderNumber, String customerEmail, List<OrderItem> items) {
@@ -58,6 +61,10 @@ public class OrderService {
             throw new InvalidOrderStateException(
                     "Cannot ship order " + orderId + " from status " + order.getStatus());
         }
+        // Book with the carrier *before* touching the order. If the carrier call throws, the order
+        // is left PAID and unsaved, so shipping it can simply be tried again later.
+        String trackingNumber = shippingClient.createShipment(order);
+        order.setTrackingNumber(trackingNumber);
         order.setStatus(OrderStatus.SHIPPED);
         return orderRepository.save(order);
     }

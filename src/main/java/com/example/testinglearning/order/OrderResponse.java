@@ -15,6 +15,7 @@ public record OrderResponse(
         String customerEmail,
         OrderStatus status,
         Instant createdAt,
+        String trackingNumber,
         List<Item> items) {
 
     public record Item(String productName, int quantity, BigDecimal unitPrice) {
@@ -27,6 +28,7 @@ public record OrderResponse(
                 order.getCustomerEmail(),
                 order.getStatus(),
                 order.getCreatedAt(),
+                order.getTrackingNumber(),
                 order.getItems().stream()
                         .map(item -> new Item(item.getProductName(), item.getQuantity(), item.getUnitPrice()))
                         .toList());

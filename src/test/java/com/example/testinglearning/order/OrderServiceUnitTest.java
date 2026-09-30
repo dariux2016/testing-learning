@@ -17,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -36,11 +37,14 @@ class OrderServiceUnitTest {
     @Mock
     private OrderEventPublisher orderEventPublisher;
 
+    @Mock
+    private ResilientShippingClient shippingClient;
+
     private OrderService orderService;
 
     @BeforeEach
     void setUp() {
-        orderService = new OrderService(orderRepository, orderEventPublisher);
+        orderService = new OrderService(orderRepository, orderEventPublisher, shippingClient);
     }
 
     // --- placeOrder -----------------------------------------------------
@@ -172,23 +176,58 @@ class OrderServiceUnitTest {
     // --- ship ---------------------------------------------------------------
 
     @Test
-    void ship_fromPaid_transitionsToShipped() {
+    void ship_fromPaid_transitionsToShippedAndStoresTrackingNumber() {
         Order order = existingOrder(1L, OrderStatus.PAID);
         when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(shippingClient.createShipment(order)).thenReturn("TRACK-123");
         when(orderRepository.save(order)).thenReturn(order);
 
         Order result = orderService.ship(1L);
 
         assertThat(result.getStatus()).isEqualTo(OrderStatus.SHIPPED);
+        assertThat(result.getTrackingNumber()).isEqualTo("TRACK-123");
     }
 
     @Test
-    void ship_fromCreated_throwsInvalidOrderStateException() {
+    void ship_whenCarrierUnavailable_leavesOrderPaidAndSavesNothing() {
+        Order order = existingOrder(1L, OrderStatus.PAID);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(shippingClient.createShipment(order))
+                .thenThrow(new ShippingUnavailableException("carrier down", null));
+
+        assertThatThrownBy(() -> orderService.ship(1L))
+                .isInstanceOf(ShippingUnavailableException.class);
+
+        // The contract here is "nothing changed", so it's worth asserting both halves of it.
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.PAID);
+        assertThat(order.getTrackingNumber()).isNull();
+        verify(orderRepository, never()).save(any());
+    }
+
+    @Test
+    void ship_whenCarrierRejects_leavesOrderPaidAndSavesNothing() {
+        Order order = existingOrder(1L, OrderStatus.PAID);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(shippingClient.createShipment(order))
+                .thenThrow(new ShipmentRejectedException("ORD-1", 422, null));
+
+        assertThatThrownBy(() -> orderService.ship(1L))
+                .isInstanceOf(ShipmentRejectedException.class);
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.PAID);
+        verify(orderRepository, never()).save(any());
+    }
+
+    @Test
+    void ship_fromCreated_throwsInvalidOrderStateExceptionWithoutCallingCarrier() {
         Order order = existingOrder(1L, OrderStatus.CREATED);
         when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
 
         assertThatThrownBy(() -> orderService.ship(1L))
                 .isInstanceOf(InvalidOrderStateException.class);
+
+        // Booking a real parcel for an unpaid order would be a costly bug.
+        verifyNoInteractions(shippingClient);
     }
 
     @Test

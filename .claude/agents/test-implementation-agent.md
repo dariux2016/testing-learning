@@ -24,7 +24,9 @@ disk. Check `src/main/java/.../order/` (or whichever feature package is active) 
 unbuilt step as its own small slice. As of this file's last update the pattern established is:
 step 1 (entity + repository + `OrderRepositorySliceTest`), step 2 (`OrderService` +
 `OrderServiceUnitTest`), step 3 (`OrderController` + `OrderControllerSliceTest`, via
-`@WebMvcTest`), and step 4 (`OrderLifecycleIntegrationTest`, full `@SpringBootTest`) are done —
+`@WebMvcTest`), step 4 (`OrderLifecycleIntegrationTest`, full `@SpringBootTest`), step 5 (Kafka
+producer/consumer), and step 6 (outbound carrier call: `ShippingClient` + `ResilientShippingClient`,
+WireMock-backed) are done —
 verify this is still true by reading the tree rather than trusting this sentence.
 
 ## Workflow
@@ -90,6 +92,19 @@ verify this is still true by reading the tree rather than trusting this sentence
   post-HTTP-call repository read that touches a lazy association needs the test class annotated
   `@Transactional` (Spring's, not jakarta's) to have an open session — safe here since it opens
   after the HTTP calls already committed on their own connections.
+- Outbound REST (step 6, see strategy doc §7 "As built in this repo"): split the raw HTTP client
+  (`ShippingClient`: request mapping + translating every failure into exactly two exceptions,
+  rejected vs. unavailable) from the resilience wrapper (`ResilientShippingClient`). Apply
+  Resilience4j **in code** (`Retry.decorateSupplier(retry, CircuitBreaker.decorateSupplier(cb, call))`),
+  not with `@Retry`/`@CircuitBreaker` annotations, so its unit test can use real Retry/CircuitBreaker
+  instances with no Spring context. Never mock `RestClient`'s fluent chain; unit-test the pure
+  mapping/translation functions instead. Slice-test the raw client with `@RestClientTest` +
+  `@AutoConfigureMockRestServiceServer(enabled = false)` + a `WireMockExtension`
+  (`@DynamicPropertySource` for the base URL), because `MockRestServiceServer` can't simulate
+  timeouts or connection resets. Any `@SpringBootTest` that ships an order needs a WireMock carrier.
+  Integration tests that record circuit-breaker failures reset the breaker in `@BeforeEach`,
+  because the cached context keeps its state across test methods. Retry/timeout values are shrunk in
+  `src/test/resources/application.properties`.
 
 ## Keeping this file current
 

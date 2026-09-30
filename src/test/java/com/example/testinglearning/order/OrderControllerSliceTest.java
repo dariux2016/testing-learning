@@ -81,6 +81,7 @@ class OrderControllerSliceTest {
                           "customerEmail": "alice@example.com",
                           "status": "CREATED",
                           "createdAt": "2026-09-17T10:15:30Z",
+                          "trackingNumber": null,
                           "items": [ { "productName": "Widget", "quantity": 2, "unitPrice": 9.99 } ]
                         }
                         """, JsonCompareMode.STRICT);
@@ -331,13 +332,49 @@ class OrderControllerSliceTest {
     }
 
     @Test
-    void ship_returns200WithUpdatedStatus() {
-        when(orderService.ship(7L)).thenReturn(order(7L, "ORD-7", OrderStatus.SHIPPED));
+    void ship_returns200WithUpdatedStatusAndTrackingNumber() {
+        Order shipped = order(7L, "ORD-7", OrderStatus.SHIPPED);
+        shipped.setTrackingNumber("TRACK-7");
+        when(orderService.ship(7L)).thenReturn(shipped);
 
         client.post().uri("/api/orders/7/ship")
                 .exchange()
                 .expectStatus().isOk()
-                .expectBody().jsonPath("$.status").isEqualTo("SHIPPED");
+                .expectBody()
+                .jsonPath("$.status").isEqualTo("SHIPPED")
+                .jsonPath("$.trackingNumber").isEqualTo("TRACK-7");
+    }
+
+    @Test
+    void ship_whenCarrierRejects_returns422ProblemDetail() {
+        when(orderService.ship(7L)).thenThrow(new ShipmentRejectedException("ORD-7", 400, null));
+
+        client.post().uri("/api/orders/7/ship")
+                .exchange()
+                .expectStatus().isEqualTo(422)
+                .expectHeader().contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody().json("""
+                        {
+                          "title": "Shipment rejected by carrier",
+                          "status": 422,
+                          "detail": "Shipping carrier rejected the shipment for order 'ORD-7' (HTTP 400)",
+                          "instance": "/api/orders/7/ship"
+                        }
+                        """, JsonCompareMode.STRICT);
+    }
+
+    @Test
+    void ship_whenCarrierUnavailable_returns503ProblemDetail() {
+        when(orderService.ship(7L))
+                .thenThrow(new ShippingUnavailableException("Shipping carrier answered HTTP 503 for order 'ORD-7'", null));
+
+        client.post().uri("/api/orders/7/ship")
+                .exchange()
+                .expectStatus().isEqualTo(503)
+                .expectHeader().contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody()
+                .jsonPath("$.title").isEqualTo("Shipping carrier unavailable")
+                .jsonPath("$.detail").isEqualTo("Shipping carrier answered HTTP 503 for order 'ORD-7'");
     }
 
     @Test
