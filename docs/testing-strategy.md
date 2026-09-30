@@ -139,6 +139,49 @@ Three levels, in order of increasing realism:
 Failure modes worth their own tests: retry/backoff behavior, dead-letter-topic routing, and
 poison-pill handling (what happens when a message fails to deserialize).
 
+- **Naming, per AGENTS.md**: Spring Boot has no dedicated `@KafkaTest` slice annotation the way it
+  has `@WebMvcTest`/`@DataJpaTest`, so levels 2 and 3 above both need a full `@SpringBootTest` +
+  Testcontainers — per §1's table that's the Integration tier, so both are named `*IntegrationTest`
+  (e.g. `PaymentConfirmationConsumerIntegrationTest`, `OrderEventPublisherIntegrationTest`) even
+  though this section calls level 2 "component" — AGENTS.md's four-suffix rule wins over that
+  label. Level 1 (no broker, no Spring context) is `*UnitTest` as usual.
+- **Spring Boot 4 / Jackson 3 gotcha**: Boot 4 defaults to Jackson 3 (`tools.jackson.*`, via
+  `spring-boot-starter-jackson`), not Jackson 2 (`com.fasterxml.jackson.databind`) — there's no
+  Jackson 2 `ObjectMapper` on the classpath unless you add one. spring-kafka's classic
+  `JsonSerializer`/`JsonDeserializer` assume Jackson 2 and will fail to load; use spring-kafka 4's
+  `JacksonJsonSerializer`/`JacksonJsonDeserializer` instead (same `spring.json.*` property keys —
+  `spring.json.trusted.packages`, `spring.json.value.default.type`, `spring.json.add.type.headers`,
+  `spring.json.use.type.headers`, etc. — just a different delegate class name).
+- **`classpath:/application.properties` gotcha**: Boot resolves this location via
+  `ClassLoader.getResource(...)`, which returns only the *first* match on the classpath — so
+  `src/test/resources/application.properties` entirely shadows (not merges with)
+  `src/main/resources/application.properties` during tests, same as this project's pre-existing
+  JPA properties split. Any property the tests need (e.g. Kafka (de)serializer config) has to be
+  repeated in the test resource file, not just the main one — it won't be inherited.
+- **`DeadLetterPublishingRecoverer` gotchas**:
+  - The default dead-letter topic name in recent spring-kafka is `<topic>-dlt` (lowercase, hyphen)
+    — not the older `<topic>.DLT` convention some examples assume. Check the real topic name
+    (e.g. from the recoverer's logs) before writing a consumer assertion against it.
+  - The recoverer sees a *different record value* depending on why the record failed: a
+    deserialization failure (poison pill, via `ErrorHandlingDeserializer`) delivers the original
+    raw bytes (`byte[]`); a business exception thrown by the listener after successful
+    deserialization delivers the already-deserialized POJO. A single template configured with the
+    app's normal (Jackson) serializer will fail to publish the `byte[]` case (or worse, silently
+    re-encode it as a base64 JSON string); a single template forced to `ByteArraySerializer` will
+    fail to publish the POJO case. Configure the recoverer from a `Map<Class<?>,
+    KafkaOperations<?, ?>>` instead — one entry for `byte[].class` (a `ByteArraySerializer`
+    producer, so poison-pill bytes reach the DLT unchanged), one for the event type (the app's
+    normal `KafkaTemplate`). `DefaultKafkaProducerFactory#copyWithConfigurationOverride(Map)` is
+    the clean way to build the byte-array variant from the app's existing producer factory without
+    duplicating its connection properties.
+- **Testing gotcha — polling a shared DLT topic across multiple `@Test` methods**: `@SpringBootTest`
+  caches the Spring context (and therefore the running listener container and the topics it uses)
+  across every test method in a class. A *fresh* consumer group with `auto-offset-reset=earliest`
+  reads the DLT topic's entire history, not just what "this" test produced — so a second `@Test`
+  method's poll can see the first method's dead letter too. Filter polled records by an expected
+  key (or another distinguishing field) rather than assuming the first record found belongs to the
+  current test.
+
 ## 7. Outbound REST calls to another service
 
 - Unit-test the client wrapper's pure logic (URL building, request/response mapping, error

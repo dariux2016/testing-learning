@@ -33,11 +33,14 @@ class OrderServiceUnitTest {
     @Mock
     private OrderRepository orderRepository;
 
+    @Mock
+    private OrderEventPublisher orderEventPublisher;
+
     private OrderService orderService;
 
     @BeforeEach
     void setUp() {
-        orderService = new OrderService(orderRepository);
+        orderService = new OrderService(orderRepository, orderEventPublisher);
     }
 
     // --- placeOrder -----------------------------------------------------
@@ -57,6 +60,10 @@ class OrderServiceUnitTest {
         ArgumentCaptor<Order> captor = ArgumentCaptor.forClass(Order.class);
         verify(orderRepository).saveAndFlush(captor.capture());
         assertThat(captor.getValue().getOrderNumber()).isEqualTo("ORD-1");
+
+        // Publishing the OrderPlacedEvent is itself a contract of a successful placeOrder call -
+        // downstream consumers rely on it - so it's worth verifying explicitly, not just stubbed.
+        verify(orderEventPublisher).publishOrderPlaced(result);
     }
 
     @Test
@@ -65,6 +72,7 @@ class OrderServiceUnitTest {
                 .isThrownBy(() -> orderService.placeOrder("ORD-2", "alice@example.com", null));
 
         verifyNoInteractions(orderRepository);
+        verifyNoInteractions(orderEventPublisher);
     }
 
     @Test
@@ -73,6 +81,7 @@ class OrderServiceUnitTest {
                 .isThrownBy(() -> orderService.placeOrder("ORD-3", "alice@example.com", List.of()));
 
         verifyNoInteractions(orderRepository);
+        verifyNoInteractions(orderEventPublisher);
     }
 
     @Test
@@ -84,6 +93,9 @@ class OrderServiceUnitTest {
         assertThatThrownBy(() -> orderService.placeOrder("ORD-DUP", "alice@example.com", items))
                 .isInstanceOf(DuplicateOrderNumberException.class)
                 .hasMessageContaining("ORD-DUP");
+
+        // The order was never durably persisted, so nothing should have been published about it.
+        verifyNoInteractions(orderEventPublisher);
     }
 
     // --- markAsPaid -------------------------------------------------------

@@ -39,6 +39,14 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Spring Boot 4 splits Kafka autoconfiguration (incl. @ServiceConnection support for
+             org.testcontainers.kafka.KafkaContainer) out of spring-boot-autoconfigure into this
+             dedicated starter, same pattern as the webmvc-test / data-jpa-test splits above. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-kafka</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -83,6 +91,20 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- await().untilAsserted(...) for asserting the async side effect of a Kafka consumer
+             (see docs/testing-strategy.md #6) - never Thread.sleep. -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

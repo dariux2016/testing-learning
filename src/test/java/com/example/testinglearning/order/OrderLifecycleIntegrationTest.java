@@ -11,6 +11,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.kafka.KafkaContainer;
+import org.testcontainers.utility.DockerImageName;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -41,6 +43,13 @@ class OrderLifecycleIntegrationTest {
     @Container
     @ServiceConnection
     static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+
+    // placeOrder() now publishes an OrderPlacedEvent (see OrderEventPublisher); a real broker here
+    // keeps that a normal, successful send instead of connection-refused noise on every test run.
+    // The event's own shape/headers are pinned by OrderEventPublisherIntegrationTest, not here.
+    @Container
+    @ServiceConnection
+    static final KafkaContainer kafka = new KafkaContainer(DockerImageName.parse("apache/kafka:4.0.0"));
 
     @Autowired
     private RestTestClient client;

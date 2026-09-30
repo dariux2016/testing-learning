@@ -10,9 +10,11 @@ import java.util.List;
 public class OrderService {
 
     private final OrderRepository orderRepository;
+    private final OrderEventPublisher orderEventPublisher;
 
-    public OrderService(OrderRepository orderRepository) {
+    public OrderService(OrderRepository orderRepository, OrderEventPublisher orderEventPublisher) {
         this.orderRepository = orderRepository;
+        this.orderEventPublisher = orderEventPublisher;
     }
 
     public Order placeOrder(String orderNumber, String customerEmail, List<OrderItem> items) {
@@ -23,11 +25,17 @@ public class OrderService {
         Order order = new Order(orderNumber, customerEmail, Instant.now());
         items.forEach(order::addItem);
 
+        Order saved;
         try {
-            return orderRepository.saveAndFlush(order);
+            saved = orderRepository.saveAndFlush(order);
         } catch (DataIntegrityViolationException e) {
             throw new DuplicateOrderNumberException(orderNumber, e);
         }
+
+        // Only publish once the order is durably persisted - never on the duplicate-order-number
+        // failure path above.
+        orderEventPublisher.publishOrderPlaced(saved);
+        return saved;
     }
 
     public Order getOrder(Long orderId) {
