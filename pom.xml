@@ -65,9 +65,35 @@
             <version>2.4.0</version>
         </dependency>
 
+        <!-- Bearer-token (JWT) resource server: validates tokens issued by Keycloak (see
+             docs/testing-strategy.md #8). Boot 4 renamed this from
+             spring-boot-starter-oauth2-resource-server, which is now deprecated. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Spring Security Test: jwt() / @WithMockUser, and the MockMvc security wiring used by
+             the @WebMvcTest slices. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- A real Keycloak as a Testcontainer, for the one security test that runs the whole chain
+             with real tokens. Not managed by Boot, hence the pinned version (built against
+             Testcontainers 2.x). -->
+        <dependency>
+            <groupId>com.github.dasniko</groupId>
+            <artifactId>testcontainers-keycloak</artifactId>
+            <version>4.3.1</version>
             <scope>test</scope>
         </dependency>
 

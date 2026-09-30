@@ -10,15 +10,22 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.client.RestTestClient;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
+
+import java.util.List;
+import java.util.Map;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
@@ -28,6 +35,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
 
 /**
  * Full integration tests for shipping an order through a WireMock carrier (see
@@ -70,6 +78,24 @@ class OrderShippingIntegrationTest {
 
     @Autowired
     private RestTestClient client;
+
+    // Security has its own tests (OrderControllerSecuritySliceTest,
+    // OrderSecurityKeycloakIntegrationTest). Here a mocked JwtDecoder accepts one fixed token as a
+    // STAFF user. The real filter chain and JWT-to-authentication conversion still run, without a
+    // Keycloak container.
+    @MockitoBean
+    private JwtDecoder jwtDecoder;
+
+    @BeforeEach
+    void authenticateAsStaff() {
+        when(jwtDecoder.decode("staff-token")).thenReturn(Jwt.withTokenValue("staff-token")
+                .header("alg", "none")
+                .subject("staff-1")
+                .claim("email", "sam@example.com")
+                .claim("realm_access", Map.of("roles", List.of("STAFF")))
+                .build());
+        client = client.mutate().defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer staff-token").build();
+    }
 
     @Autowired
     private OrderRepository orderRepository;

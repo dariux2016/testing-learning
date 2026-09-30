@@ -1,0 +1,42 @@
+{
+  "realm": "orders",
+  "enabled": true,
+  "roles": {
+    "realm": [
+      { "name": "CUSTOMER", "description": "Can place, view and cancel their own orders" },
+      { "name": "STAFF", "description": "Back office: any order, plus pay and ship" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "orders-api-test",
+      "description": "Test-only public client. Direct access grants (the password grant) let a test obtain a token with a plain HTTP call instead of a browser login. Never enable this for a real client.",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@example.com",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Customer",
+      "enabled": true,
+      "credentials": [ { "type": "password", "value": "alice-password", "temporary": false } ],
+      "realmRoles": [ "CUSTOMER" ]
+    },
+    {
+      "username": "sam",
+      "email": "sam@example.com",
+      "emailVerified": true,
+      "firstName": "Sam",
+      "lastName": "Staff",
+      "enabled": true,
+      "credentials": [ { "type": "password", "value": "sam-password", "temporary": false } ],
+      "realmRoles": [ "STAFF" ]
+    }
+  ]
+}

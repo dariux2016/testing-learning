@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -43,6 +44,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
+// placeOrder() is protected by method security (@PreAuthorize, see OrderService). This test calls it
+// directly, not over HTTP, so no token is involved: @WithMockUser puts a STAFF user into the
+// SecurityContext for each test method instead.
+@WithMockUser(roles = "STAFF")
 class OrderEventPublisherIntegrationTest {
 
     @Container

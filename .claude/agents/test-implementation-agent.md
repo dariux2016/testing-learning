@@ -25,8 +25,8 @@ unbuilt step as its own small slice. As of this file's last update the pattern e
 step 1 (entity + repository + `OrderRepositorySliceTest`), step 2 (`OrderService` +
 `OrderServiceUnitTest`), step 3 (`OrderController` + `OrderControllerSliceTest`, via
 `@WebMvcTest`), step 4 (`OrderLifecycleIntegrationTest`, full `@SpringBootTest`), step 5 (Kafka
-producer/consumer), and step 6 (outbound carrier call: `ShippingClient` + `ResilientShippingClient`,
-WireMock-backed) are done —
+producer/consumer), step 6 (outbound carrier call: `ShippingClient` + `ResilientShippingClient`,
+WireMock-backed), and step 7 (JWT resource-server security with Keycloak, layered tests) are done —
 verify this is still true by reading the tree rather than trusting this sentence.
 
 ## Workflow
@@ -105,6 +105,18 @@ verify this is still true by reading the tree rather than trusting this sentence
   Integration tests that record circuit-breaker failures reset the breaker in `@BeforeEach`,
   because the cached context keeps its state across test methods. Retry/timeout values are shrunk in
   `src/test/resources/application.properties`.
+- Security (step 7, see strategy doc §8 "As built in this repo"): everything under `/api/**` needs a
+  bearer JWT from now on. Any new `@WebMvcTest` must `@Import(SecurityConfig.class)` and
+  authenticate (class-level `@WithMockUser(roles = "STAFF")` when security isn't the subject, or
+  `jwt().authorities(...)` with `MockMvcTester` when it is). Any new
+  `@SpringBootTest(RANDOM_PORT)` uses a `@MockitoBean JwtDecoder` plus a default
+  `Authorization: Bearer` header via `client.mutate()`. Only `OrderSecurityKeycloakIntegrationTest`
+  uses real Keycloak. A non-web test calling a secured service method directly uses
+  `@WithMockUser`. URL/role rules go in `SecurityConfig`. Data-dependent rules go in `@PreAuthorize`
+  on the service, never `@PostAuthorize` on a method that changes data. Don't annotate methods that
+  Kafka listeners call (no logged-in user there).
+- Windows gotcha when editing files with Python: always open with `encoding='utf-8'`. The default
+  cp1252 corrupts non-ASCII characters such as `§` and `—`, which are common in this repo's comments.
 
 ## Keeping this file current
 

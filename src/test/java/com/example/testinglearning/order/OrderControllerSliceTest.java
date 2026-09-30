@@ -1,12 +1,15 @@
 package com.example.testinglearning.order;
 
+import com.example.testinglearning.security.SecurityConfig;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.json.JsonCompareMode;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -38,8 +41,14 @@ import static org.mockito.Mockito.when;
  *
  * <p>{@link RestTestClient} is bound to MockMvc here (no real HTTP server); the same client API is
  * reused against a live server in the full integration tests of §5.
+ *
+ * <p>Security (§8) is real here but kept out of the way: the actual {@link SecurityConfig} filter
+ * chain is imported, and every request runs as a STAFF user via {@code @WithMockUser}, so no request
+ * is ever turned away. Which roles get 401/403 is {@code OrderControllerSecuritySliceTest}'s job.
  */
 @WebMvcTest(OrderController.class)
+@Import(SecurityConfig.class)
+@WithMockUser(roles = "STAFF")
 @AutoConfigureRestTestClient
 class OrderControllerSliceTest {
 

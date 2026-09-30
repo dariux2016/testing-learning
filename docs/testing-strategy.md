@@ -245,6 +245,57 @@ Layered, from cheapest to most realistic:
   or two tests that need to prove the entire chain — token issuance through to authorized
   response — actually works end-to-end. Keep this to a minimum; it's expensive.
 
+**As built in this repo** (a stateless JWT resource server, tokens from Keycloak, roles `CUSTOMER`
+and `STAFF`):
+
+- **Two layers of rules, each tested where it lives.** `SecurityConfig` (the filter chain) holds
+  rules that need only the URL and a role (pay/ship are STAFF-only, everything else needs a valid
+  token). Rules that need the *data* ("is this your order?") are `@PreAuthorize`/`@PostAuthorize`
+  on `OrderService`, enabled by a separate `MethodSecurityConfig`.
+- **Unit (`KeycloakRealmRoleConverterUnitTest`)**: Keycloak's nested `realm_access.roles` becomes
+  `ROLE_*` authorities, a missing or malformed claim gives no roles (never an exception), and the
+  principal name is the `email` claim, since ownership rules compare it with `customerEmail`.
+- **Web slice (`OrderControllerSecuritySliceTest`)**: `@WebMvcTest` + `@Import(SecurityConfig.class)`,
+  with `OrderService` mocked. Covers the 401/403/200 table using `jwt().authorities(...)` from Spring
+  Security Test, plus a few requests with a real `Authorization: Bearer` header decoded by a
+  `@MockitoBean JwtDecoder`. `jwt()` skips both the bearer-token filter and our role converter;
+  the header path runs them. Uses `MockMvcTester`, since `jwt()` is a MockMvc request post-processor.
+- **CSRF**: turned off on purpose, because a bearer-token API with no cookies gives CSRF nothing to
+  exploit. The test pins down what makes that safe: a POST with a token but no CSRF token succeeds,
+  and no session or `Set-Cookie` is created.
+- **Method-security slice (`OrderServiceMethodSecuritySliceTest`)**: `@SpringJUnitConfig` with only
+  `MethodSecurityConfig`, `OrderService` and `OrderAccess`, collaborators as `@MockitoBean`s,
+  and the user set with `@WithMockUser(username = email, roles = ...)`. It's the smallest context
+  with the proxy that makes the annotations work. A plain unit test can't see them. Lessons pinned:
+  - `@PreAuthorize` stops the method before it runs (`verifyNoInteractions` on the repository).
+  - `@PostAuthorize` **runs the method first**, even for an anonymous caller, and only withholds the
+    result. So it's fine for reads, and wrong for a method that changes data: `cancel` uses
+    `@PreAuthorize` with an `@orderAccess.isOwner(...)` lookup bean instead.
+  - A customer gets "denied" rather than 404 for an order that doesn't exist, so they can't probe
+    which ids exist.
+- **Don't secure methods that background callers use**: `markAsPaid` is called by the Kafka
+  listener with no logged-in user, so it has no annotation. Its HTTP endpoint is locked down in the
+  filter chain instead, and a test proves it still works unauthenticated.
+- **Other integration tests** (`OrderLifecycleIntegrationTest`, `OrderShippingIntegrationTest`)
+  use a `@MockitoBean JwtDecoder` that turns one fixed token into a STAFF user. The real filter
+  chain still runs, just without Keycloak. The `webEnvironment = NONE` Kafka test calls the service
+  directly under `@WithMockUser`. `SecurityConfig` is `@ConditionalOnWebApplication(SERVLET)`,
+  because a non-web context has no `HttpSecurity` bean.
+- **Real Keycloak (`OrderSecurityKeycloakIntegrationTest`, 2 tests)**: `testcontainers-keycloak`
+  imports `src/test/resources/keycloak/orders-realm.json` (test users plus a public client allowing
+  the password grant, for tests only). `@DynamicPropertySource` points `issuer-uri` at the
+  container. The test fetches real tokens over HTTP and proves what everything else skips:
+  signature and issuer validation (a token with one signature character flipped gets 401), and the
+  claim shapes of a real Keycloak token.
+- Spring Security 7 behaviors the tests pin: the 401 challenge includes
+  `resource_metadata=".../.well-known/oauth-protected-resource"` (RFC 9728), and
+  `JwtAuthenticationConverter` adds a `FACTOR_BEARER` authority next to the roles, which Spring
+  uses for multi-factor support.
+- Spring Boot 4 module notes: use `spring-boot-starter-security-oauth2-resource-server` (the old
+  `spring-boot-starter-oauth2-resource-server` is deprecated) and `spring-boot-starter-security-test`.
+  `@WebMvcTest` includes the resource-server autoconfig. An `issuer-uri` decoder is created
+  lazily, so contexts that never see a token never contact Keycloak.
+
 ## 9. Edge cases & cross-cutting concerns
 
 - Bean Validation edge cases: null, blank, boundary length/value, malformed input — and assert the
