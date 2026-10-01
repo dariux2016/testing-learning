@@ -26,7 +26,8 @@ step 1 (entity + repository + `OrderRepositorySliceTest`), step 2 (`OrderService
 `OrderServiceUnitTest`), step 3 (`OrderController` + `OrderControllerSliceTest`, via
 `@WebMvcTest`), step 4 (`OrderLifecycleIntegrationTest`, full `@SpringBootTest`), step 5 (Kafka
 producer/consumer), step 6 (outbound carrier call: `ShippingClient` + `ResilientShippingClient`,
-WireMock-backed), and step 7 (JWT resource-server security with Keycloak, layered tests) are done —
+WireMock-backed), step 7 (JWT resource-server security with Keycloak, layered tests), and step 8
+(edge cases: validation, Clock, idempotency, optimistic locking, jqwik) are done —
 verify this is still true by reading the tree rather than trusting this sentence.
 
 ## Workflow
@@ -115,6 +116,16 @@ verify this is still true by reading the tree rather than trusting this sentence
   `@WithMockUser`. URL/role rules go in `SecurityConfig`. Data-dependent rules go in `@PreAuthorize`
   on the service, never `@PostAuthorize` on a method that changes data. Don't annotate methods that
   Kafka listeners call (no logged-in user there).
+- Edge cases (step 8, see strategy doc §9 "As built in this repo"): new time-dependent logic takes
+  the `Clock` bean (`Instant.now(clock)`, never bare `Instant.now()`); `OrderService` now has a
+  4-arg constructor with the clock last. Request DTO constraints always get an explicit
+  `message` (they're part of the 400 `errors` contract, and default messages are locale-dependent),
+  and request numbers are boxed (`Integer` + `@NotNull`), because Jackson 3 fails on a missing
+  primitive. Validation tests are `@ParameterizedTest` tables, one broken rule per row plus the
+  accepted side of each boundary. Kafka handlers must be idempotent; prove "X did not reach the
+  DLT" with a sentinel message, never with a sleep. `Order` has `@Version`. For a concurrency or
+  idempotency test, temporarily remove the fix once to confirm the test fails without it.
+  Property tests use jqwik (`@Property`), named `XxxPropertyUnitTest`.
 - Windows gotcha when editing files with Python: always open with `encoding='utf-8'`. The default
   cp1252 corrupts non-ASCII characters such as `§` and `—`, which are common in this repo's comments.
 

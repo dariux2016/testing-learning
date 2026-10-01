@@ -23,6 +23,7 @@ import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
@@ -138,6 +139,39 @@ class PaymentConfirmationConsumerIntegrationTest {
         }
     }
 
+    @Test
+    void paymentConfirmed_deliveredTwice_marksPaidOnceAndNeverReachesTheDeadLetterTopic() {
+        Order order = orderRepository.saveAndFlush(new Order("ORD-KAFKA-DUP", "alice@example.com", Instant.now()));
+        String duplicateKey = "dup-" + order.getId();
+        String payload = """
+                { "orderId": %d, "paymentReference": "PAY-REF-DUP", "confirmedAt": "2026-10-01T10:00:00Z" }
+                """.formatted(order.getId());
+
+        try (KafkaConsumer<String, String> dltConsumer = dltConsumer()) {
+            // At-least-once delivery, simulated: the exact same message, twice.
+            producer.send(new ProducerRecord<>(PaymentConfirmationListener.PAYMENT_CONFIRMATIONS_TOPIC, duplicateKey, payload));
+            producer.send(new ProducerRecord<>(PaymentConfirmationListener.PAYMENT_CONFIRMATIONS_TOPIC, duplicateKey, payload));
+
+            // Proving that something did NOT happen needs a moment when we know it *would* have
+            // happened by then. So a sentinel follows: a payment for an unknown order, which is
+            // certain to reach the DLT. The topic has a single partition, so the listener handles
+            // messages strictly in order. By the time the sentinel is on the DLT, both duplicates
+            // have been fully processed, retries included. No sleeping and no guessing at timeouts.
+            String sentinelKey = "sentinel-" + UUID.randomUUID();
+            producer.send(new ProducerRecord<>(PaymentConfirmationListener.PAYMENT_CONFIRMATIONS_TOPIC, sentinelKey, """
+                    { "orderId": 999999998, "paymentReference": "PAY-REF-SENTINEL", "confirmedAt": "2026-10-01T10:00:00Z" }
+                    """));
+            producer.flush();
+
+            List<ConsumerRecord<String, String>> deadLetters =
+                    pollUntilRecordWithKey(dltConsumer, sentinelKey, Duration.ofSeconds(15));
+
+            assertThat(deadLetters).extracting(ConsumerRecord::key).doesNotContain(duplicateKey);
+        }
+
+        assertThat(orderRepository.findById(order.getId()).orElseThrow().getStatus()).isEqualTo(OrderStatus.PAID);
+    }
+
     private KafkaConsumer<String, String> dltConsumer() {
         Properties props = new Properties();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers());
@@ -162,5 +196,21 @@ class PaymentConfirmationConsumerIntegrationTest {
             }
         }
         throw new AssertionError("No record with key '" + expectedKey + "' received on the DLT within " + timeout);
+    }
+
+    /** Like {@link #pollForRecordWithKey}, but returns every record seen up to and including that key. */
+    private static List<ConsumerRecord<String, String>> pollUntilRecordWithKey(
+            KafkaConsumer<String, String> consumer, String stopKey, Duration timeout) {
+        List<ConsumerRecord<String, String>> seen = new ArrayList<>();
+        Instant deadline = Instant.now().plus(timeout);
+        while (Instant.now().isBefore(deadline)) {
+            for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(500))) {
+                seen.add(record);
+                if (stopKey.equals(record.key())) {
+                    return seen;
+                }
+            }
+        }
+        throw new AssertionError("No record with key '" + stopKey + "' received on the DLT within " + timeout);
     }
 }

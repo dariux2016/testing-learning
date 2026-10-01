@@ -7,6 +7,7 @@ import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabas
 import org.springframework.boot.jpa.test.autoconfigure.TestEntityManager;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -78,6 +79,30 @@ class OrderRepositorySliceTest {
         Optional<Order> found = orderRepository.findByOrderNumber("");
 
         assertThat(found).isEmpty();
+    }
+
+    @Test
+    void save_staleCopy_isRejectedInsteadOfOverwritingANewerChange() {
+        // A race between two requests, replayed in slow motion on one thread. Both "requests" read
+        // the same version of the order, the first saves, then the second saves its stale copy.
+        Long id = entityManager.persistFlushFind(new Order("ORD-LOCK", "alice@example.com", Instant.now())).getId();
+        entityManager.clear();
+
+        Order seenByShip = orderRepository.findById(id).orElseThrow();
+        entityManager.detach(seenByShip);
+        Order seenByCancel = orderRepository.findById(id).orElseThrow();
+        entityManager.detach(seenByCancel);
+
+        seenByCancel.setStatus(OrderStatus.CANCELLED);
+        orderRepository.saveAndFlush(seenByCancel);
+
+        seenByShip.setStatus(OrderStatus.SHIPPED);
+        // Without @Version this would succeed, and the cancellation would vanish without a trace.
+        assertThatThrownBy(() -> orderRepository.saveAndFlush(seenByShip))
+                .isInstanceOf(ObjectOptimisticLockingFailureException.class);
+
+        entityManager.clear();
+        assertThat(orderRepository.findById(id).orElseThrow().getStatus()).isEqualTo(OrderStatus.CANCELLED);
     }
 
     @Test

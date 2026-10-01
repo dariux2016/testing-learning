@@ -99,7 +99,9 @@ class OrderEventPublisherIntegrationTest {
         assertThat(body.get("orderId").asLong()).isEqualTo(placed.getId());
         assertThat(body.get("orderNumber").asString()).isEqualTo("ORD-KAFKA-EVT-1");
         assertThat(body.get("customerEmail").asString()).isEqualTo("alice@example.com");
-        assertThat(Instant.parse(body.get("placedAt").asString())).isBeforeOrEqualTo(Instant.now());
+        // placedAt is the order's own createdAt, not a second reading of the clock, so it can be
+        // compared exactly rather than with "roughly now".
+        assertThat(Instant.parse(body.get("placedAt").asString())).isEqualTo(placed.getCreatedAt());
     }
 
     private ConsumerRecord<String, String> pollForOneRecord(Duration timeout) {

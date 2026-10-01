@@ -24,8 +24,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
@@ -35,6 +38,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.when;
 
 /**
@@ -53,7 +57,10 @@ import static org.mockito.Mockito.when;
  *       database still holds the order as PAID.</li>
  * </ul>
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+// The race test below holds the carrier's reply for 1s. The shared test read timeout (500ms) would
+// cut that off, so this class gets more headroom. The 503 tests don't depend on timeouts.
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "shipping.client.read-timeout=5s")
 @AutoConfigureRestTestClient
 @Testcontainers
 class OrderShippingIntegrationTest {
@@ -169,6 +176,46 @@ class OrderShippingIntegrationTest {
         Order persisted = orderRepository.findById(orderId).orElseThrow();
         assertThat(persisted.getStatus()).isEqualTo(OrderStatus.PAID);
         assertThat(persisted.getTrackingNumber()).isNull();
+    }
+
+    @Test
+    void ship_racingWithCancel_failsWith409AndTheCancellationWins() throws Exception {
+        // The carrier holds its answer for 1s. That's the window in which the race happens.
+        carrier.stubFor(post("/shipments").willReturn(okJson("""
+                { "trackingNumber": "TRACK-TOO-LATE" }
+                """).withStatus(201).withFixedDelay(1_000)));
+        Long orderId = placeAndPayOrder("ORD-SHIP-RACE");
+
+        // Request 1: ship. It loads the order (status PAID, version n) and then waits on the carrier.
+        CompletableFuture<Integer> shipStatus = CompletableFuture.supplyAsync(() ->
+                client.post().uri("/api/orders/{id}/ship", orderId)
+                        .exchange()
+                        .returnResult(String.class)
+                        .getStatus().value());
+
+        // Wait for a deterministic signal, not a sleep: once WireMock has *received* the request,
+        // ship is guaranteed to be stuck inside the carrier call holding a version-n copy.
+        await().atMost(Duration.ofSeconds(5))
+                .until(() -> carrier.findAll(postRequestedFor(urlEqualTo("/shipments"))).size() == 1);
+
+        // Request 2: cancel, in that window. It commits CANCELLED (version n+1).
+        client.post().uri("/api/orders/{id}/cancel", orderId)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.status").isEqualTo("CANCELLED");
+
+        // Request 1 resumes and tries to save SHIPPED over version n: rejected.
+        assertThat(shipStatus.get(10, TimeUnit.SECONDS)).isEqualTo(409);
+
+        Order persisted = orderRepository.findById(orderId).orElseThrow();
+        assertThat(persisted.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(persisted.getTrackingNumber()).isNull();
+
+        // What this test also documents: the carrier *did* book a parcel for an order that is now
+        // cancelled. Optimistic locking protects our data, not the outside world. Undoing the
+        // booking (a compensating "cancel shipment" call, or an outbox) is a separate design
+        // problem and deliberately out of scope here.
+        carrier.verify(1, postRequestedFor(urlEqualTo("/shipments")));
     }
 
     private Long placeAndPayOrder(String orderNumber) {

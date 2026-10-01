@@ -25,6 +25,12 @@ import org.testcontainers.utility.DockerImageName;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
@@ -175,5 +181,44 @@ class OrderLifecycleIntegrationTest {
                 .jsonPath("$.detail").isEqualTo("An order with number 'ORD-LIFECYCLE-DUP' already exists");
 
         assertThat(orderRepository.findByOrderNumber("ORD-LIFECYCLE-DUP")).isPresent();
+    }
+
+    @Test
+    void placeOrder_twoConcurrentRequestsWithTheSameNumber_exactlyOneWins() throws Exception {
+        // The test above sends the duplicate *after* the first insert committed. Here two requests
+        // are released at the same instant, which is the realistic double-click / client retry
+        // case. Only the database's unique constraint can referee that: an "if exists" check in
+        // Java would let both through when they interleave.
+        String body = """
+                {
+                  "orderNumber": "ORD-LIFECYCLE-RACE",
+                  "customerEmail": "alice@example.com",
+                  "items": [ { "productName": "Widget", "quantity": 1, "unitPrice": 9.99 } ]
+                }
+                """;
+        CountDownLatch startGate = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Callable<Integer> placeOrder = () -> {
+                startGate.await();
+                return client.post().uri("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(body)
+                        .exchange()
+                        .returnResult(String.class)
+                        .getStatus().value();
+            };
+            Future<Integer> first = executor.submit(placeOrder);
+            Future<Integer> second = executor.submit(placeOrder);
+            startGate.countDown();
+
+            // Which one wins is up to timing; that exactly one does is not.
+            assertThat(List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(201, 409);
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(orderRepository.findByOrderNumber("ORD-LIFECYCLE-RACE")).isPresent();
     }
 }

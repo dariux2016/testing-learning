@@ -4,3 +4,6 @@ target/
 *.iml
 .vscode/
 .DS_Store
+
+# jqwik stores failing seeds here to replay them first on the next run (local only)
+.jqwik-database

@@ -6,8 +6,6 @@ import org.springframework.messaging.Message;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
-
 /**
  * Producer-side wrapper around {@link KafkaTemplate} for order events (see
  * docs/testing-strategy.md #6, producer-side testing level). Keeping this as its own small class
@@ -29,7 +27,9 @@ public class OrderEventPublisher {
 
     public void publishOrderPlaced(Order order) {
         OrderPlacedEvent event = new OrderPlacedEvent(
-                order.getId(), order.getOrderNumber(), order.getCustomerEmail(), Instant.now());
+                // The order's own timestamp, not a second "now": the event describes when the
+                // order was placed, and the two must never disagree by a few milliseconds.
+                order.getId(), order.getOrderNumber(), order.getCustomerEmail(), order.getCreatedAt());
 
         // Keyed by orderNumber (not id) so every event for the same order lands on the same
         // partition, and so a consumer never needs a database round trip just to correlate events.

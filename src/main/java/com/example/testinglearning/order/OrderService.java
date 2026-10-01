@@ -5,6 +5,8 @@ import org.springframework.security.access.prepost.PostAuthorize;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -19,15 +21,20 @@ import java.util.List;
 @Service
 public class OrderService {
 
+    /** How long after placing it a customer may still cancel an order (inclusive). */
+    static final Duration CANCELLATION_WINDOW = Duration.ofMinutes(30);
+
     private final OrderRepository orderRepository;
     private final OrderEventPublisher orderEventPublisher;
     private final ResilientShippingClient shippingClient;
+    private final Clock clock;
 
     public OrderService(OrderRepository orderRepository, OrderEventPublisher orderEventPublisher,
-                        ResilientShippingClient shippingClient) {
+                        ResilientShippingClient shippingClient, Clock clock) {
         this.orderRepository = orderRepository;
         this.orderEventPublisher = orderEventPublisher;
         this.shippingClient = shippingClient;
+        this.clock = clock;
     }
 
     @PreAuthorize("hasRole('STAFF') or #customerEmail == authentication.name")
@@ -36,7 +43,7 @@ public class OrderService {
             throw new IllegalArgumentException("An order must have at least one item");
         }
 
-        Order order = new Order(orderNumber, customerEmail, Instant.now());
+        Order order = new Order(orderNumber, customerEmail, Instant.now(clock));
         items.forEach(order::addItem);
 
         Order saved;
@@ -60,6 +67,14 @@ public class OrderService {
 
     public Order markAsPaid(Long orderId) {
         Order order = getOrThrow(orderId);
+        // Idempotent on purpose. Kafka delivers at least once, so the same PaymentConfirmedEvent
+        // can arrive twice (a redelivery after a rebalance, a producer retry). The payment has
+        // already been recorded, so a duplicate is a no-op, not an error that gets retried and
+        // ends up on the dead-letter topic. SHIPPED implies PAID, so it counts too. A payment for
+        // a CANCELLED order is still an error: money really arrived and someone must refund it.
+        if (order.getStatus() == OrderStatus.PAID || order.getStatus() == OrderStatus.SHIPPED) {
+            return order;
+        }
         if (order.getStatus() != OrderStatus.CREATED) {
             throw new InvalidOrderStateException(
                     "Cannot mark order " + orderId + " as paid from status " + order.getStatus());
@@ -90,6 +105,12 @@ public class OrderService {
         if (order.getStatus() == OrderStatus.SHIPPED || order.getStatus() == OrderStatus.CANCELLED) {
             throw new InvalidOrderStateException(
                     "Cannot cancel order " + orderId + " from status " + order.getStatus());
+        }
+        // Inclusive: at exactly createdAt + 30 minutes cancelling is still allowed; one instant
+        // later it isn't. OrderServiceUnitTest pins both sides with a fixed Clock.
+        Instant deadline = order.getCreatedAt().plus(CANCELLATION_WINDOW);
+        if (Instant.now(clock).isAfter(deadline)) {
+            throw new CancellationWindowExpiredException(orderId, CANCELLATION_WINDOW);
         }
         order.setStatus(OrderStatus.CANCELLED);
         return orderRepository.save(order);

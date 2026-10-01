@@ -47,6 +47,13 @@
             <artifactId>spring-boot-starter-kafka</artifactId>
         </dependency>
 
+        <!-- Bean Validation (Hibernate Validator) for @Valid request bodies and constrained
+             @RequestParams (see docs/testing-strategy.md #9). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
         <!-- Spring Boot 4 splits RestClient.Builder autoconfiguration (HTTP message converters,
              request-factory detection) out of the web starter into this one. Used by
              ShippingClient for the outbound call to the carrier (see docs/testing-strategy.md #7). -->
@@ -84,6 +91,16 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Property-based testing (see docs/testing-strategy.md #9): jqwik generates hundreds of
+             inputs per property instead of a handful of hand-picked examples. It's a separate
+             JUnit Platform engine, so Surefire discovers @Property methods next to @Test ones. -->
+        <dependency>
+            <groupId>net.jqwik</groupId>
+            <artifactId>jqwik</artifactId>
+            <version>1.10.1</version>
             <scope>test</scope>
         </dependency>
 

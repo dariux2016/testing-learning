@@ -11,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import jakarta.persistence.Version;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -36,6 +37,13 @@ public class Order {
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
+
+    // Optimistic locking (see docs/testing-strategy.md §9). Every UPDATE becomes
+    // "... WHERE id = ? AND version = ?" and increments the version. If another request changed
+    // the row in between, zero rows match and Hibernate throws instead of silently overwriting the
+    // other change (a "lost update"). Managed by Hibernate only, so there's no setter.
+    @Version
+    private Long version;
 
     // Assigned by the shipping carrier when the order ships; null until then.
     @Column(name = "tracking_number")

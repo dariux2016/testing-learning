@@ -1,5 +1,7 @@
 package com.example.testinglearning.order;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Email;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -24,7 +26,7 @@ public class OrderController {
     }
 
     @PostMapping(consumes = "application/json")
-    public ResponseEntity<OrderResponse> placeOrder(@RequestBody PlaceOrderRequest request) {
+    public ResponseEntity<OrderResponse> placeOrder(@Valid @RequestBody PlaceOrderRequest request) {
         Order order = orderService.placeOrder(
                 request.orderNumber(), request.customerEmail(), request.toOrderItems());
 
@@ -41,7 +43,8 @@ public class OrderController {
     }
 
     @GetMapping
-    public List<OrderResponse> findRecentOrdersForCustomer(@RequestParam String customerEmail) {
+    public List<OrderResponse> findRecentOrdersForCustomer(
+            @RequestParam @Email(message = "must be a well-formed email address") String customerEmail) {
         return orderService.findRecentOrdersForCustomer(customerEmail).stream()
                 .map(OrderResponse::from)
                 .toList();

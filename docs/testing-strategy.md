@@ -307,6 +307,63 @@ and `STAFF`):
 - **Property-based testing with jqwik** for pure functions with large input spaces — optional,
   worth introducing once the example-based basics above are solid.
 
+**As built in this repo:**
+
+- **Bean Validation as an error contract.** `PlaceOrderRequest` has constraints, each with an
+  explicit `message`. Hibernate Validator's default messages follow the JVM locale, so the same
+  request would get different bodies on an Italian machine and an English one.
+  `OrderExceptionHandler` overrides `handleMethodArgumentNotValid` (for `@Valid @RequestBody`) and
+  `handleHandlerMethodValidationException` (for a constraint directly on a `@RequestParam`, which
+  Spring 6.1+ validates itself). Both add a sorted `errors: [{field, message}]` array to the 400
+  `ProblemDetail`.
+  - Tests are `@ParameterizedTest @MethodSource` in `OrderControllerSliceTest`. One table row per
+    broken rule: a body valid except for one field, the exact `errors` entry, and
+    `verifyNoInteractions(service)`.
+  - A second table holds the accepted side of each boundary (quantity 0 is rejected / 1 accepted,
+    1000 accepted / 1001 rejected, price 0.00 / 0.01, 50 / 51 characters, 100 / 101 items).
+  - One STRICT-JSON test with five errors at once pins the sorting.
+  - Gotcha: **Jackson 3 rejects a missing primitive field** (`FAIL_ON_NULL_FOR_PRIMITIVES` is on by
+    default) while parsing, so an `int quantity` that's missing becomes a generic "Bad Request"
+    before validation runs. Use `Integer` + `@NotNull` to keep it inside the error contract.
+- **Time via an injected `Clock`.** `ClockConfig` provides `Clock.systemUTC()`. `OrderService`
+  calls `Instant.now(clock)`. The rule it enables: cancelling is allowed for 30 minutes after an
+  order is placed, inclusive. `OrderServiceUnitTest` uses `Clock.fixed(...)` to put "now" at
+  29:59, exactly 30:00, and 30:00.001, and asserts `createdAt` with exact equality.
+  `OrderPlacedEvent.placedAt` reuses the order's `createdAt` rather than reading the clock again,
+  so the event and the row can never disagree.
+- **Idempotent consumer.** Kafka delivers at least once, so `markAsPaid` on an already PAID or
+  SHIPPED order is a no-op with no save. Before, a duplicate was an exception, then retries, then a
+  dead letter. A payment for a CANCELLED order still fails, because it needs a refund.
+  - Proving "the duplicate did *not* reach the DLT" without sleeping: send the duplicate twice,
+    then a **sentinel** message certain to reach the DLT. With one partition the listener works in
+    order, so once the sentinel is on the DLT the duplicates are fully done; then assert their key
+    isn't there.
+- **Optimistic locking.** `@Version` on `Order` turns a lost update into
+  `ObjectOptimisticLockingFailureException`, returned as a 409 "Concurrent modification".
+  - Deterministic slice test: two detached copies of one order, saved one after the other in a
+    single thread (`OrderRepositorySliceTest`).
+  - Real race made deterministic (`OrderShippingIntegrationTest`): WireMock delays the carrier
+    reply by 1 second, and the test waits until WireMock has *received* the ship request, which is
+    a signal, not a sleep. It then cancels; ship returns 409 and CANCELLED wins. The test also
+    documents what locking doesn't fix: the carrier has already booked a parcel. Compensating for
+    that is a separate design problem.
+  - Race on the unique constraint (`OrderLifecycleIntegrationTest`): two threads released by one
+    `CountDownLatch` POST the same order number; the result is exactly `{201, 409}`, whichever
+    thread wins.
+- **Check that the test can fail.** For the idempotency and locking tests, remove the fix
+  temporarily and confirm the test goes red. A concurrency test that passes either way proves
+  nothing.
+- **jqwik** (`ShippingClientPropertyUnitTest`, `KeycloakRealmRoleConverterPropertyUnitTest`): runs
+  as its own JUnit Platform engine next to Jupiter. jqwik 1.10.1 works under Boot 4's JUnit 6.
+  Properties tested:
+  - every 4xx except 429 is a rejection, every 5xx is "unavailable"
+  - error messages always name the order
+  - parcels mirror items
+  - the role converter never throws for any claim shape
+  For a small range like `@IntRange(min = 400, max = 499)`, jqwik checks every value ("generation
+  = EXHAUSTIVE" in its report) instead of sampling. `.jqwik-database`, where jqwik records failing
+  seeds to replay, is git-ignored.
+
 ## 10. Architecture & suite-quality tests
 
 - **ArchUnit**: encode layering rules as an actual test (e.g. "controllers must not depend on

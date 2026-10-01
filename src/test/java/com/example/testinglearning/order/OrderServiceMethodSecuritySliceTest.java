@@ -3,6 +3,8 @@ package com.example.testinglearning.order;
 import com.example.testinglearning.security.MethodSecurityConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
 import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.security.test.context.support.WithMockUser;
@@ -11,7 +13,9 @@ import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 
@@ -37,11 +41,21 @@ import static org.mockito.Mockito.when;
  * <p>A denied call throws {@link AuthorizationDeniedException}. Over HTTP, Spring Security turns
  * that into a 403.
  */
-@SpringJUnitConfig({MethodSecurityConfig.class, OrderService.class, OrderAccess.class})
+@SpringJUnitConfig({MethodSecurityConfig.class, OrderService.class, OrderAccess.class,
+        OrderServiceMethodSecuritySliceTest.FixedClock.class})
 class OrderServiceMethodSecuritySliceTest {
 
     private static final String ALICE = "alice@example.com";
     private static final String BOB = "bob@example.com";
+
+    /** OrderService needs a Clock. Fixed 5 minutes after orderOf()'s createdAt, inside the cancel window. */
+    @Configuration
+    static class FixedClock {
+        @Bean
+        Clock clock() {
+            return Clock.fixed(Instant.parse("2026-09-30T10:05:00Z"), ZoneOffset.UTC);
+        }
+    }
 
     @Autowired
     private OrderService orderService;

@@ -7,9 +7,13 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 
@@ -40,11 +44,16 @@ class OrderServiceUnitTest {
     @Mock
     private ResilientShippingClient shippingClient;
 
+    // "Now" for every test in this class. Orders built by existingOrder() were placed 5 minutes
+    // earlier, comfortably inside the cancellation window. The window tests use their own clocks.
+    private static final Instant NOW = Instant.parse("2026-10-01T12:00:00Z");
+    private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+
     private OrderService orderService;
 
     @BeforeEach
     void setUp() {
-        orderService = new OrderService(orderRepository, orderEventPublisher, shippingClient);
+        orderService = new OrderService(orderRepository, orderEventPublisher, shippingClient, clock);
     }
 
     // --- placeOrder -----------------------------------------------------
@@ -60,6 +69,8 @@ class OrderServiceUnitTest {
         assertThat(result.getCustomerEmail()).isEqualTo("alice@example.com");
         assertThat(result.getStatus()).isEqualTo(OrderStatus.CREATED);
         assertThat(result.getItems()).containsExactlyElementsOf(items);
+        // An exact equality on a timestamp is only possible because the clock is fixed.
+        assertThat(result.getCreatedAt()).isEqualTo(NOW);
 
         ArgumentCaptor<Order> captor = ArgumentCaptor.forClass(Order.class);
         verify(orderRepository).saveAndFlush(captor.capture());
@@ -147,21 +158,25 @@ class OrderServiceUnitTest {
     }
 
     @Test
-    void markAsPaid_whenAlreadyPaid_throwsInvalidOrderStateException() {
+    void markAsPaid_whenAlreadyPaid_isANoOpForDuplicateDeliveries() {
         Order order = existingOrder(1L, OrderStatus.PAID);
         when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
 
-        assertThatThrownBy(() -> orderService.markAsPaid(1L))
-                .isInstanceOf(InvalidOrderStateException.class);
+        Order result = orderService.markAsPaid(1L);
+
+        assertThat(result.getStatus()).isEqualTo(OrderStatus.PAID);
+        // "No-op" means no write at all, not a write of the same value.
+        verify(orderRepository, never()).save(any());
     }
 
     @Test
-    void markAsPaid_whenShipped_throwsInvalidOrderStateException() {
+    void markAsPaid_whenAlreadyShipped_isANoOpToo() {
+        // A late duplicate can arrive after the order has moved on. It must not move it back.
         Order order = existingOrder(1L, OrderStatus.SHIPPED);
         when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
 
-        assertThatThrownBy(() -> orderService.markAsPaid(1L))
-                .isInstanceOf(InvalidOrderStateException.class);
+        assertThat(orderService.markAsPaid(1L).getStatus()).isEqualTo(OrderStatus.SHIPPED);
+        verify(orderRepository, never()).save(any());
     }
 
     @Test
@@ -202,6 +217,19 @@ class OrderServiceUnitTest {
         assertThat(order.getStatus()).isEqualTo(OrderStatus.PAID);
         assertThat(order.getTrackingNumber()).isNull();
         verify(orderRepository, never()).save(any());
+    }
+
+    @Test
+    void ship_whenSaveLosesARaceWithAnotherRequest_letsTheLockingFailurePropagate() {
+        // The service doesn't catch or retry this. Retrying blindly could overwrite a cancellation
+        // that just happened; the client has to reload and decide.
+        Order order = existingOrder(1L, OrderStatus.PAID);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(shippingClient.createShipment(order)).thenReturn("TRACK-1");
+        when(orderRepository.save(order)).thenThrow(new ObjectOptimisticLockingFailureException(Order.class, 1L));
+
+        assertThatThrownBy(() -> orderService.ship(1L))
+                .isInstanceOf(ObjectOptimisticLockingFailureException.class);
     }
 
     @Test
@@ -263,6 +291,59 @@ class OrderServiceUnitTest {
         assertThat(result.getStatus()).isEqualTo(OrderStatus.CANCELLED);
     }
 
+    // The window boundary, pinned from both sides. Each test builds its own service with a clock
+    // placed exactly where it needs "now" to be. No sleeping, no "roughly 30 minutes".
+
+    @Test
+    void cancel_justInsideTheWindow_isAllowed() {
+        Instant placedAt = Instant.parse("2026-10-01T09:00:00Z");
+        OrderService service = serviceAt(placedAt.plus(Duration.ofMinutes(29)).plusSeconds(59));
+        Order order = orderPlacedAt(placedAt);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(orderRepository.save(order)).thenReturn(order);
+
+        assertThat(service.cancel(1L).getStatus()).isEqualTo(OrderStatus.CANCELLED);
+    }
+
+    @Test
+    void cancel_exactlyAtTheEndOfTheWindow_isStillAllowed() {
+        Instant placedAt = Instant.parse("2026-10-01T09:00:00Z");
+        OrderService service = serviceAt(placedAt.plus(Duration.ofMinutes(30)));
+        Order order = orderPlacedAt(placedAt);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(orderRepository.save(order)).thenReturn(order);
+
+        assertThat(service.cancel(1L).getStatus()).isEqualTo(OrderStatus.CANCELLED);
+    }
+
+    @Test
+    void cancel_oneMillisecondAfterTheWindow_throwsAndSavesNothing() {
+        Instant placedAt = Instant.parse("2026-10-01T09:00:00Z");
+        OrderService service = serviceAt(placedAt.plus(Duration.ofMinutes(30)).plusMillis(1));
+        Order order = orderPlacedAt(placedAt);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+
+        assertThatThrownBy(() -> service.cancel(1L))
+                .isInstanceOf(CancellationWindowExpiredException.class)
+                .hasMessage("Order 1 can no longer be cancelled: the 30-minute cancellation window has passed");
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.CREATED);
+        verify(orderRepository, never()).save(any());
+    }
+
+    @Test
+    void cancel_whenShippedAndOutsideTheWindow_reportsTheStatusProblemFirst() {
+        // Both rules are broken; the status check runs first, so its message wins. Pinning the
+        // order means a future refactor can't silently change which error clients see.
+        Instant placedAt = Instant.parse("2026-10-01T09:00:00Z");
+        OrderService service = serviceAt(placedAt.plus(Duration.ofHours(5)));
+        Order order = orderPlacedAt(placedAt);
+        order.setStatus(OrderStatus.SHIPPED);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+
+        assertThatThrownBy(() -> service.cancel(1L)).isInstanceOf(InvalidOrderStateException.class);
+    }
+
     @Test
     void cancel_fromShipped_throwsInvalidOrderStateException() {
         Order order = existingOrder(1L, OrderStatus.SHIPPED);
@@ -293,8 +374,16 @@ class OrderServiceUnitTest {
         assertThat(result).isSameAs(expected);
     }
 
+    private OrderService serviceAt(Instant now) {
+        return new OrderService(orderRepository, orderEventPublisher, shippingClient, Clock.fixed(now, ZoneOffset.UTC));
+    }
+
+    private static Order orderPlacedAt(Instant placedAt) {
+        return new Order("ORD-1", "alice@example.com", placedAt);
+    }
+
     private static Order existingOrder(Long id, OrderStatus status) {
-        Order order = new Order("ORD-" + id, "alice@example.com", Instant.now());
+        Order order = new Order("ORD-" + id, "alice@example.com", NOW.minus(Duration.ofMinutes(5)));
         order.setStatus(status);
         return order;
     }
